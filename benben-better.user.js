@@ -8,6 +8,7 @@
 // @match        https://www.luogu.com/*
 // @grant        GM_addStyle
 // @run-at       document-end
+// @license      MIT
 // ==/UserScript==
 
 (function() {
