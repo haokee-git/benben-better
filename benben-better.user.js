@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BenBen Better
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.1.0
 // @description  在任意洛谷页面快速发送犇犇
 // @author       Haokee & Claude Sonnet 4.5
 // @match        https://www.luogu.com.cn/*
@@ -19,8 +19,6 @@
         /* 浮动按钮 */
         #benben-float-btn {
             position: fixed;
-            right: 30px;
-            bottom: 30px;
             width: 60px;
             height: 60px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -31,46 +29,51 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             color: white;
             font-size: 24px;
             font-weight: bold;
             font-family: -apple-system, BlinkMacSystemFont, "San Francisco", "Helvetica Neue", "Noto Sans CJK SC", "Noto Sans CJK", "Source Han Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+            user-select: none;
+            touch-action: none;
         }
 
         #benben-float-btn::before {
             content: '犇';
         }
 
-        #benben-float-btn:hover {
+        #benben-float-btn:not(.dragging):hover {
             transform: scale(1.1);
             box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
         }
 
-        #benben-float-btn:active {
+        #benben-float-btn:not(.dragging):active {
             transform: scale(0.95);
+        }
+
+        #benben-float-btn.dragging {
+            cursor: grabbing;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.7);
         }
 
         /* 浮动窗口 */
         #benben-float-window {
             position: fixed;
-            right: 30px;
-            bottom: 100px;
             width: 380px;
             background: white;
             border-radius: 16px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
             z-index: 9999;
             opacity: 0;
-            transform: translateY(20px) scale(0.95);
+            transform: scale(0.95);
             pointer-events: none;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             overflow: hidden;
         }
 
         #benben-float-window.show {
             opacity: 1;
-            transform: translateY(0) scale(1);
+            transform: scale(1);
             pointer-events: auto;
         }
 
@@ -208,15 +211,8 @@
         /* 响应式适配 */
         @media (max-width: 768px) {
             #benben-float-window {
-                right: 10px;
-                bottom: 80px;
                 width: calc(100vw - 20px);
                 max-width: 380px;
-            }
-
-            #benben-float-btn {
-                right: 10px;
-                bottom: 10px;
             }
         }
 
@@ -528,16 +524,169 @@
 
         let isWindowOpen = false;
 
-        // 点击浮动按钮
-        floatBtn.addEventListener('click', () => {
-            isWindowOpen = !isWindowOpen;
-            if (isWindowOpen) {
-                floatWindow.classList.add('show');
-                setTimeout(() => textarea.focus(), 400);
-            } else {
-                floatWindow.classList.remove('show');
+        // 拖动相关变量
+        const BTN_SIZE = 60;
+        const WINDOW_WIDTH = 380;
+        const WINDOW_HEIGHT = 280; // 估计窗口高度
+        const LONG_PRESS_DURATION = 300; // 长按触发时间（毫秒）
+
+        let btnX = window.innerWidth - BTN_SIZE - 30;
+        let btnY = window.innerHeight - BTN_SIZE - 30;
+        let isDragging = false;
+        let longPressTimer = null;
+        let startX = 0;
+        let startY = 0;
+        let hasMoved = false;
+
+        // 初始化按钮位置
+        function updateBtnPosition() {
+            floatBtn.style.left = btnX + 'px';
+            floatBtn.style.top = btnY + 'px';
+            updateWindowPosition();
+        }
+
+        // 更新窗口位置（相对于按钮）
+        function updateWindowPosition() {
+            // 计算窗口位置：优先在按钮上方，否则在下方
+            let windowX = btnX + BTN_SIZE / 2 - WINDOW_WIDTH / 2;
+            let windowY = btnY - WINDOW_HEIGHT - 10;
+
+            // 如果窗口超出顶部，则放到按钮下方
+            if (windowY < 10) {
+                windowY = btnY + BTN_SIZE + 10;
+            }
+
+            // 确保窗口不超出左右边界
+            if (windowX < 10) {
+                windowX = 10;
+            } else if (windowX + WINDOW_WIDTH > window.innerWidth - 10) {
+                windowX = window.innerWidth - WINDOW_WIDTH - 10;
+            }
+
+            // 确保窗口不超出底部
+            if (windowY + WINDOW_HEIGHT > window.innerHeight - 10) {
+                windowY = window.innerHeight - WINDOW_HEIGHT - 10;
+            }
+
+            floatWindow.style.left = windowX + 'px';
+            floatWindow.style.top = windowY + 'px';
+        }
+
+        // 边界约束
+        function constrainPosition(x, y) {
+            x = Math.max(0, Math.min(x, window.innerWidth - BTN_SIZE));
+            y = Math.max(0, Math.min(y, window.innerHeight - BTN_SIZE));
+            return { x, y };
+        }
+
+        // 开始拖动
+        function startDrag(clientX, clientY) {
+            isDragging = true;
+            hasMoved = false;
+            floatBtn.classList.add('dragging');
+            startX = clientX - btnX;
+            startY = clientY - btnY;
+        }
+
+        // 拖动中
+        function onDrag(clientX, clientY) {
+            if (!isDragging) return;
+
+            hasMoved = true;
+            const pos = constrainPosition(clientX - startX, clientY - startY);
+            btnX = pos.x;
+            btnY = pos.y;
+            updateBtnPosition();
+        }
+
+        // 结束拖动
+        function endDrag() {
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+
+            const wasDragging = isDragging && hasMoved;
+            isDragging = false;
+            floatBtn.classList.remove('dragging');
+
+            return wasDragging;
+        }
+
+        // 鼠标事件
+        floatBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            hasMoved = false;
+
+            longPressTimer = setTimeout(() => {
+                startDrag(e.clientX, e.clientY);
+            }, LONG_PRESS_DURATION);
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                onDrag(e.clientX, e.clientY);
             }
         });
+
+        document.addEventListener('mouseup', (e) => {
+            const wasDragging = endDrag();
+
+            // 如果不是拖动，则处理点击
+            if (!wasDragging && e.target === floatBtn) {
+                isWindowOpen = !isWindowOpen;
+                if (isWindowOpen) {
+                    floatWindow.classList.add('show');
+                    setTimeout(() => textarea.focus(), 400);
+                } else {
+                    floatWindow.classList.remove('show');
+                }
+            }
+        });
+
+        // 触摸事件
+        floatBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            hasMoved = false;
+            const touch = e.touches[0];
+
+            longPressTimer = setTimeout(() => {
+                startDrag(touch.clientX, touch.clientY);
+            }, LONG_PRESS_DURATION);
+        }, { passive: false });
+
+        document.addEventListener('touchmove', (e) => {
+            if (isDragging) {
+                const touch = e.touches[0];
+                onDrag(touch.clientX, touch.clientY);
+            }
+        }, { passive: false });
+
+        document.addEventListener('touchend', (e) => {
+            const wasDragging = endDrag();
+
+            // 如果不是拖动，则处理点击
+            if (!wasDragging) {
+                isWindowOpen = !isWindowOpen;
+                if (isWindowOpen) {
+                    floatWindow.classList.add('show');
+                    setTimeout(() => textarea.focus(), 400);
+                } else {
+                    floatWindow.classList.remove('show');
+                }
+            }
+        });
+
+        // 窗口大小改变时重新约束位置
+        window.addEventListener('resize', () => {
+            const pos = constrainPosition(btnX, btnY);
+            btnX = pos.x;
+            btnY = pos.y;
+            updateBtnPosition();
+        });
+
+        // 初始化位置
+        updateBtnPosition();
 
         // 点击关闭按钮
         closeBtn.addEventListener('click', (e) => {
